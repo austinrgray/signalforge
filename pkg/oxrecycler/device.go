@@ -2,6 +2,7 @@ package oxrecycler
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"net"
@@ -110,7 +111,6 @@ func (d *Device) listenForServerMessages() {
 			continue
 		}
 
-		// Process the received message
 		message := string(buffer[:n])
 		fmt.Println("Received message for device:", d.ID, "Message:", message)
 	}
@@ -157,48 +157,57 @@ func (d *Device) StopSimulation() {
 }
 
 func (d *Device) heartbeatMessage() string {
-	return fmt.Sprintf(`
-		----------------------------
-		Heartbeat for Device: %s
-		----------------------------
-		Serial Number:      %s
-		Status:             %s
-		Connection Status:  %s
-		Mode:               %s
-		Temperature:        %.2f °C
-		Pressure:           %.2f hPa
-		O2 Output:          %.2f L/min
-		O2 Concentration:   %.2f %%
-		CO2 Input:          %.2f L/min
-		CO2 Concentration:  %.2f %%
-		Power Consumption:  %.2f W
-		Alert Level:        %s
-		Error Codes:        %v
-		Error Messages:     %v
-		Last Maintenance:   %s
-		Last Communication: %s
-		Runtime:            %s
-		----------------------------
-		`,
-		d.ID,
-		d.SerialNumber,
-		d.Status,
-		d.ConnectionStatus,
-		d.Mode,
-		d.Temperature,
-		d.Pressure,
-		d.O2Output,
-		d.O2Concentration,
-		d.CO2Input,
-		d.CO2Concentration,
-		d.PowerConsumption,
-		d.AlertLevel,
-		d.ErrorCodes,
-		d.ErrorMessages,
-		d.LastMaintenance.Format("2006-01-02 15:04:05"),
-		d.LastCommTime.Format("2006-01-02 15:04:05"),
-		d.Runtime.String(),
-	)
+	hMsg := struct {
+		ID               string   `json:"id"`
+		SerialNumber     string   `json:"serial_number"`
+		Status           string   `json:"status"`
+		MessageType      string   `json:"messageType"`
+		ConnectionStatus string   `json:"connection_status"`
+		Mode             string   `json:"mode"`
+		Temperature      float32  `json:"temperature"`
+		Pressure         float32  `json:"pressure"`
+		O2Output         float32  `json:"o2_output"`
+		O2Concentration  float32  `json:"o2_concentration"`
+		CO2Input         float32  `json:"co2_input"`
+		CO2Concentration float32  `json:"co2_concentration"`
+		PowerConsumption float32  `json:"power_consumption"`
+		AlertLevel       string   `json:"alert_level"`
+		ErrorCodes       []string `json:"error_codes"`
+		ErrorMessages    []string `json:"error_messages"`
+		LastMaintenance  string   `json:"last_maintenance"`
+		LastCommTime     string   `json:"last_comm_time"`
+		Runtime          string   `json:"runtime"`
+	}{
+		ID:               d.ID,
+		SerialNumber:     d.SerialNumber,
+		Status:           d.Status,
+		MessageType:      "heartbeat",
+		ConnectionStatus: d.ConnectionStatus,
+		Mode:             d.Mode,
+		Temperature:      d.Temperature,
+		Pressure:         d.Pressure,
+		O2Output:         d.O2Output,
+		O2Concentration:  d.O2Concentration,
+		CO2Input:         d.CO2Input,
+		CO2Concentration: d.CO2Concentration,
+		PowerConsumption: d.PowerConsumption,
+		AlertLevel:       d.AlertLevel,
+		ErrorCodes:       d.ErrorCodes,
+		ErrorMessages:    d.ErrorMessages,
+		LastMaintenance:  d.LastMaintenance.Format("2006-01-02 15:04:05"),
+		LastCommTime:     d.LastCommTime.Format("2006-01-02 15:04:05"),
+		Runtime:          d.Runtime.String(),
+	}
+
+	// Marshal to JSON
+	jsonData, err := json.MarshalIndent(hMsg, "", "  ")
+	if err != nil {
+		fmt.Println("Error marshaling JSON:", err)
+		return ""
+	}
+	fmt.Println(string(jsonData))
+	// Return the JSON as a string
+	return string(jsonData)
 }
 
 func (d *Device) MutateDevice() {
