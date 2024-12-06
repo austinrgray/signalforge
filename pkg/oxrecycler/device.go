@@ -6,29 +6,29 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"os"
 	"time"
 )
 
 type Device struct {
-	ID                  string
-	SerialNumber        string
-	Status              string
-	ConnectionStatus    string
-	Mode                string
-	Temperature         float32
-	Pressure            float32
-	O2Output            float32
-	O2Concentration     float32
-	CO2Input            float32
-	CO2Concentration    float32
-	PowerConsumption    float32
-	AlertLevel          string
-	ErrorCodes          []string
-	ErrorMessages       []string
-	LastMaintenance     time.Time
-	LastCommTime        time.Time
-	Runtime             time.Duration
-	HeartbeatInterval   time.Duration
+	ID                  string        `json:"ID"`
+	SerialNumber        string        `json:"SerialNumber"`
+	Status              string        `json:"Status"`
+	ConnectionStatus    string        `json:"ConnectionStatus"`
+	Mode                string        `json:"Mode"`
+	Temperature         float32       `json:"Temperature"`
+	Pressure            float32       `json:"Pressure"`
+	O2Output            float32       `json:"O2Output"`
+	O2Concentration     float32       `json:"O2Concentration"`
+	CO2Input            float32       `json:"CO2Input"`
+	CO2Concentration    float32       `json:"CO2Concentration"`
+	PowerConsumption    float32       `json:"PowerConsumption"`
+	AlertLevel          string        `json:"AlertLevel"`
+	ErrorCodes          []string      `json:"ErrorCodes"`
+	ErrorMessages       []string      `json:"ErrorMessages"`
+	LastMaintenance     *time.Time    `json:"LastMaintenance"`
+	LastCommTime        *time.Time    `json:"LastCommTime"`
+	HeartbeatInterval   time.Duration `json:"HeartbeatInterval"`
 	connectionContext   context.Context
 	connectionCancel    context.CancelFunc
 	simulationContext   context.Context
@@ -36,28 +36,48 @@ type Device struct {
 	tcpServerConnection net.Conn
 }
 
-func DefaultDevice() *Device {
-	return &Device{
-		ID:                "O2-Habitat-Primary",
-		SerialNumber:      "O2R-SN4567",
-		Status:            "Offline",
-		ConnectionStatus:  "No Connection",
-		Mode:              "Normal",
-		Temperature:       22.5,
-		Pressure:          1.2,
-		O2Output:          10.0,
-		O2Concentration:   21.0,
-		CO2Input:          0.0,
-		CO2Concentration:  0.04,
-		PowerConsumption:  15.0,
-		AlertLevel:        "Normal",
-		ErrorCodes:        []string{},
-		ErrorMessages:     []string{},
-		LastMaintenance:   time.Now(),
-		LastCommTime:      time.Now(),
-		Runtime:           0,
-		HeartbeatInterval: 5 * time.Second,
+func LoadDeviceFromConfig(deviceType string) (*Device, error) {
+	file, err := os.Open("pkg/oxrecycler/config.json")
+	if err != nil {
+		return nil, fmt.Errorf("could not open config.json: %w", err)
 	}
+	defer file.Close()
+
+	var config map[string]struct {
+		DefaultValues Device `json:"default_values"`
+	}
+
+	decoder := json.NewDecoder(file)
+	if err := decoder.Decode(&config); err != nil {
+		return nil, fmt.Errorf("could not parse JSON from file %s: %w", file.Name(), err)
+	}
+
+	var deviceKey string
+	switch deviceType {
+	case "primary":
+		deviceKey = "o2_recycler_primary"
+	case "secondary":
+		deviceKey = "o2_recycler_secondary"
+	default:
+		return nil, fmt.Errorf("invalid device type: %s", deviceType)
+	}
+
+	deviceConfig, exists := config[deviceKey]
+	if !exists {
+		return nil, fmt.Errorf("device type %s not found in configuration", deviceType)
+	}
+
+	device := deviceConfig.DefaultValues
+	device.HeartbeatInterval *= time.Second
+
+	if device.LastMaintenance == nil {
+		device.LastMaintenance = &time.Time{} // Default value
+	}
+	if device.LastCommTime == nil {
+		device.LastCommTime = &time.Time{} // Default value
+	}
+
+	return &device, nil
 }
 
 func (d *Device) Start(tcpServerAddress string) {
@@ -120,7 +140,6 @@ func (d *Device) startHeartbeat() {
 	retries := 0
 	for {
 		if d.tcpServerConnection == nil {
-			// Skip heartbeat if the connection is not available
 			fmt.Println("No active TCP connection for device:", d.ID)
 			return
 		}
@@ -176,7 +195,6 @@ func (d *Device) heartbeatMessage() string {
 		ErrorMessages    []string `json:"error_messages"`
 		LastMaintenance  string   `json:"last_maintenance"`
 		LastCommTime     string   `json:"last_comm_time"`
-		Runtime          string   `json:"runtime"`
 	}{
 		ID:               d.ID,
 		SerialNumber:     d.SerialNumber,
@@ -196,17 +214,13 @@ func (d *Device) heartbeatMessage() string {
 		ErrorMessages:    d.ErrorMessages,
 		LastMaintenance:  d.LastMaintenance.Format("2006-01-02 15:04:05"),
 		LastCommTime:     d.LastCommTime.Format("2006-01-02 15:04:05"),
-		Runtime:          d.Runtime.String(),
 	}
 
-	// Marshal to JSON
 	jsonData, err := json.MarshalIndent(hMsg, "", "  ")
 	if err != nil {
 		fmt.Println("Error marshaling JSON:", err)
 		return ""
 	}
-	fmt.Println(string(jsonData))
-	// Return the JSON as a string
 	return string(jsonData)
 }
 
