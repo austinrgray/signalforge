@@ -3,29 +3,31 @@ package main
 import (
 	"flag"
 	"log"
+	"sync"
+
 	"signalforge/pkg/oxrecycler"
 )
 
 func main() {
-	/*err := godotenv.Load()
-
-	if err != nil {
-		log.Fatalf("Error loading .env file: %v", err)
-	}
-
-	tcpServerAddress := os.Getenv("SERVER_HOST_TCP") + ":" + os.Getenv("SERVER_PORT_TCP")
-	*/
-	deviceConfig := flag.String("device", "primary", "Key of the device to load from the configuration (e.g., PrimaryRecycler, SecondaryRecycler)")
+	jsonConfigPath := "pkg/oxrecycler/config.json"
+	presetID := flag.String("device", "device-uuid-1234", "Key of the device to load from the configuration (e.g., device-uuid-1234, device-uuid-5678, device-uuid-9101)")
 	flag.Parse()
 
-	tcpServerAddress := "localhost:9000"
-
-	device, err := oxrecycler.LoadDeviceFromConfig(*deviceConfig)
+	config, err := oxrecycler.LoadConfigs(jsonConfigPath, *presetID)
 	if err != nil {
 		log.Fatalf("Error loading device from config: %v", err)
 	}
 
-	device.Start(tcpServerAddress)
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		err := config.Device.InitializeConnection("localhost:3000")
+		if err != nil {
+			log.Printf("Error initializing connection: %v", err)
+		}
+		go config.Device.Start()
+	}()
 
-	select {}
+	wg.Wait()
 }

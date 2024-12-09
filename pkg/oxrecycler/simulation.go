@@ -1,5 +1,6 @@
 package oxrecycler
 
+/*
 import (
 	"time"
 )
@@ -10,3 +11,4 @@ func startSimulation(d *Device) {
 		time.Sleep(1 * time.Second)
 	}
 }
+*/

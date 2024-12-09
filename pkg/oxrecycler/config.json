@@ -1,46 +1,51 @@
 {
-    "o2_recycler_primary": {
-        "default_values": {
-            "ID": "o2-recycler-primary",
-            "SerialNumber": "O2R-SN4567",
-            "Status": "Offline",
-            "ConnectionStatus": "No Connection",
-            "Mode": "Normal",
-            "Temperature": 22.5,
-            "Pressure": 1.2,
-            "O2Output": 10.0,
-            "O2Concentration": 21.0,
-            "CO2Input": 0.0,
-            "CO2Concentration": 0.04,
-            "PowerConsumption": 15.0,
-            "AlertLevel": "Normal",
-            "ErrorCodes": [],
-            "ErrorMessages": [],
-            "LastMaintenance": null,
-            "LastCommTime": null,
-            "HeartbeatInterval": 3
+    "devices": [
+        {
+            "device_id": "device-uuid-1234",
+            "status": "DISCONNECTED",
+            "mode": "NORMAL",
+            "temperature": 35.3,
+            "last_maintenance": null,
+            "heartbeat_interval": "3s",
+            "errors": []
+        },
+        {
+            "device_id": "device-uuid-5678",
+            "status": "DISCONNECTED",
+            "mode": "LOW POWER",
+            "temperature": 16.9,
+            "last_maintenance": "2023-12-15T10:30:00Z",
+            "heartbeat_interval": "7s",
+            "errors": [
+                {
+                    "err_code": "E1001",
+                    "err_msg": "Warning: device needs calibrated",
+                    "alert_level": "LOW",
+                    "timestamp": "2024-01-01T10:00:00Z"
+                }
+            ]
+        },
+        {
+            "device_id": "device-uuid-9101",
+            "status": "MAINTENANCE",
+            "mode": "OFF",
+            "temperature": 0.0,
+            "last_maintenance": null,
+            "heartbeat_interval": "15s",
+            "errors": [
+                {
+                    "err_code": "E1001",
+                    "err_msg": "Warning: device needs calibrated",
+                    "alert_level": "LOW",
+                    "timestamp": "2024-01-01T10:00:00Z"
+                },
+                {
+                    "err_code": "E7001",
+                    "err_msg": "Faulty Intake",
+                    "alert_level": "CRITICAL",
+                    "timestamp": "2024-01-01T10:00:00Z"
+                }
+            ]
         }
-    },
-    "o2_recycler_secondary": {
-        "default_values": {
-            "ID": "o2-recycler-secondary",
-            "SerialNumber": "O2R-SN232",
-            "Status": "Offline",
-            "ConnectionStatus": "No Connection",
-            "Mode": "Normal",
-            "Temperature": 21.1,
-            "Pressure": 0.6,
-            "O2Output": 5.0,
-            "O2Concentration": 17.0,
-            "CO2Input": 0.0,
-            "CO2Concentration": 0.08,
-            "PowerConsumption": 10.0,
-            "AlertLevel": "Normal",
-            "ErrorCodes": [],
-            "ErrorMessages": [],
-            "LastMaintenance": null,
-            "LastCommTime": null,
-            "HeartbeatInterval": 5
-        }
-    }
+    ]
 }
