@@ -1,51 +1,12 @@
 {
-    "devices": [
-        {
-            "device_id": "device-uuid-1234",
-            "status": "DISCONNECTED",
-            "mode": "NORMAL",
-            "temperature": 35.3,
-            "last_maintenance": null,
-            "heartbeat_interval": "3s",
-            "errors": []
-        },
-        {
-            "device_id": "device-uuid-5678",
-            "status": "DISCONNECTED",
-            "mode": "LOW POWER",
-            "temperature": 16.9,
-            "last_maintenance": "2023-12-15T10:30:00Z",
-            "heartbeat_interval": "7s",
-            "errors": [
-                {
-                    "err_code": "E1001",
-                    "err_msg": "Warning: device needs calibrated",
-                    "alert_level": "LOW",
-                    "timestamp": "2024-01-01T10:00:00Z"
-                }
-            ]
-        },
-        {
-            "device_id": "device-uuid-9101",
-            "status": "MAINTENANCE",
-            "mode": "OFF",
-            "temperature": 0.0,
-            "last_maintenance": null,
-            "heartbeat_interval": "15s",
-            "errors": [
-                {
-                    "err_code": "E1001",
-                    "err_msg": "Warning: device needs calibrated",
-                    "alert_level": "LOW",
-                    "timestamp": "2024-01-01T10:00:00Z"
-                },
-                {
-                    "err_code": "E7001",
-                    "err_msg": "Faulty Intake",
-                    "alert_level": "CRITICAL",
-                    "timestamp": "2024-01-01T10:00:00Z"
-                }
-            ]
-        }
-    ]
+    "connection": {
+        "max_connection_attempts": 15,
+        "max_retries_on_error": 3,
+        "max_message_size": 4096,
+        "connection_attempt_delay": "5s",
+        "connection_lockout_duration": "60s",
+        "handshake_timeout": "10s",
+        "read_timeout": "15s",
+        "write_timeout": "15s"
+    }
 }

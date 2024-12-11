@@ -11,6 +11,7 @@ import (
 )
 
 type Device struct {
+	Config            Config
 	DeviceID          string        `json:"device_id"`
 	Temperature       float32       `json:"temperature"`
 	Mode              DeviceMode    `json:"mode"`
@@ -28,11 +29,16 @@ type Connection struct {
 	RemoteAddress     string
 	TCPConnection     net.Conn
 	LastCommunication time.Time
-	msgch             chan json.RawMessage
+	msgch             chan Message[any]
 	connCtx           context.Context
-	cancelCtx         context.CancelFunc
 	mu                sync.RWMutex
 	wg                sync.WaitGroup
+}
+
+type Message[T any] struct {
+	Headers MessageHead `json:"headers"`
+	Payload T           `json:"payload"`
+	Errors  []Error     `json:"errors,omitempty"`
 }
 
 type MessageHead struct {
@@ -40,24 +46,23 @@ type MessageHead struct {
 	TransactionID string      `json:"transaction_id"`
 	From          string      `json:"from"`
 	Type          MessageType `json:"message_type"`
-	MessageLength int         `json:"message_length"`
 	Timestamp     time.Time   `json:"timestamp"`
 }
 
-type Message struct {
-	Headers MessageHead    `json:"headers"`
-	Payload MessagePayload `json:"payload"`
-	Errors  []Error        `json:"errors,omitempty"`
+type HeartbeatPayload struct {
+	DeviceID        string           `json:"device_id"`
+	Temperature     float32          `json:"temperature"`
+	Mode            DeviceMode       `json:"mode"`
+	LastMaintenance time.Time        `json:"last_maintenance"`
+	Status          ConnectionStatus `json:"connection_status"`
 }
 
 type Error struct {
-	ErrCode    string    `json:"err_code"`
-	ErrMsg     string    `json:"err_msg"`
-	AlertLevel string    `json:"alert_level"`
-	Timestamp  time.Time `json:"timestamp"`
+	Code        string    `json:"error_code"`
+	Description string    `json:"error_message"`
+	AlertLevel  string    `json:"alert_level"`
+	Timestamp   time.Time `json:"timestamp"`
 }
-
-type MessagePayload json.RawMessage
 
 type ConnectionStatus string
 
@@ -99,49 +104,43 @@ const (
 	MsgTypeResponse     MessageType = "response"
 )
 
-func CreateDevice(config Config) *Device {
-	return &Device{
-		DeviceID:          config.Preset.DeviceID,
-		Temperature:       config.Preset.Temperature,
-		Mode:              config.Preset.Mode,
-		LastMaintenance:   config.Preset.LastMaintenance,
-		HeartbeatInterval: config.Preset.HeartbeatInterval,
-		Errors:            config.Preset.Errors,
-	}
-}
+func (d *Device) Start() {
+	d.wg.Add(1)
+	//go d.StartSimulation()
+	go d.Connect()
 
-func (d *Device) Start(config Config) {
-	d.wg.Add(1) //d.wg.Add(3) go d.StartSimulation() go d.StartHeartbeat()
-	go func() {
-		defer d.wg.Done()
-		d.Connect(config)
-		d.Disconnect()
-	}()
 	d.wg.Wait()
 	d.Shutdown()
 }
 
-func (d *Device) Connect(config Config) {
-	err := d.InitializeConnection(config.Preset.TCPServerAddress)
+func (d *Device) Connect() {
+	defer d.wg.Done()
+	d.wg.Add(1)
+	err := d.InitializeConnection()
 	if err != nil {
-
+		fmt.Println("error initializing connection")
 		return
 	}
-	d.Connection.wg.Add(1)
-	go d.readLoop()
-	d.Connection.wg.Wait()
+	select {
+	case <-d.Connection.connCtx.Done():
+		fmt.Println("Connect: connection context has ended")
+		return
+	default:
+		d.Connection.wg.Add(2)
+		go d.readLoop()
+		go d.startHeartbeat()
+		d.Connection.wg.Wait()
+	}
 }
 
 func (d *Device) Disconnect() {
 	d.mu.Lock()
 	defer d.mu.Unlock()
+	defer d.wg.Done()
 
 	if d.Connection.TCPConnection != nil {
 		fmt.Printf("Device %s: Closing old connection to %s...\n", d.DeviceID, d.Connection.RemoteAddress)
 
-		if d.Connection.cancelCtx != nil {
-			d.Connection.cancelCtx()
-		}
 		if err := d.Connection.TCPConnection.Close(); err != nil {
 			fmt.Printf("Device %s: Error closing connection: %v\n", d.DeviceID, err)
 		}
@@ -152,9 +151,10 @@ func (d *Device) Disconnect() {
 	}
 }
 
-func (d *Device) InitializeConnection(addr string) error {
-	connCtx, cancelCtx := context.WithCancel(context.Background())
-	conn, err := net.Dial("tcp", addr)
+func (d *Device) InitializeConnection() error {
+	defer d.wg.Done()
+	connCtx := context.Background()
+	conn, err := net.Dial("tcp", d.Config.TCPServerHost+d.Config.TCPServerPort)
 	if err != nil {
 		return fmt.Errorf("failed to connect to server: %w", err)
 	}
@@ -164,14 +164,15 @@ func (d *Device) InitializeConnection(addr string) error {
 		RemoteAddress:     conn.RemoteAddr().String(),
 		TCPConnection:     conn,
 		LastCommunication: time.Now(),
-		msgch:             make(chan json.RawMessage, 10),
+		msgch:             make(chan Message[any], 10),
 		connCtx:           connCtx,
-		cancelCtx:         cancelCtx,
 	}
-
+	d.Connection.mu.Lock()
 	d.Connection.Status = StatusInit
+	d.Connection.mu.Unlock()
 	err = d.Connection.performHandshake()
 	if err != nil {
+		d.wg.Add(1)
 		d.Disconnect()
 		return fmt.Errorf("handshake failed: %w", err)
 	}
@@ -204,6 +205,12 @@ func (c *Connection) performHandshake() error {
 			return fmt.Errorf("failed to send client token: %w", err)
 		}
 		fmt.Println("Client token sent successfully")
+
+		err = c.receiveConnectionID()
+		if err != nil {
+			return fmt.Errorf("failed to receive connectionID: %w", err)
+		}
+		fmt.Printf("Received connectionID: %s\n", c.ConnectionID)
 	}
 
 	return nil
@@ -216,6 +223,19 @@ func (c *Connection) receiveServerPublicKey() (string, error) {
 		return "", err
 	}
 	return string(buffer[:n]), nil
+}
+
+func (c *Connection) receiveConnectionID() error {
+	buffer := make([]byte, 4096)
+	n, err := c.TCPConnection.Read(buffer)
+	if err != nil {
+		return err
+	}
+	c.mu.Lock()
+	c.ConnectionID = string(buffer[:n])
+	c.mu.Unlock()
+
+	return nil
 }
 
 func generateClientToken() string {
@@ -234,9 +254,8 @@ func (d *Device) Shutdown() {
 }
 
 func (d *Device) readLoop() {
-	defer func() {
-		d.Disconnect()
-	}()
+	defer d.Connection.wg.Done()
+	defer d.Connection.TCPConnection.Close()
 
 	buf := make([]byte, 2048)
 	for {
@@ -247,63 +266,125 @@ func (d *Device) readLoop() {
 		default:
 			n, err := d.Connection.TCPConnection.Read(buf)
 			if err != nil {
+				if err == net.ErrClosed || err.Error() == "use of closed network connection" {
+					fmt.Println("ReadLoop: Connection closed")
+					return
+				}
 				fmt.Printf("ReadLoop: Read error: %v\n", err)
 				return
 			}
-			fmt.Printf("ReadLoop: Failed to unmarshal message: %v\n", string(buf[:n]))
-
-			/*
-				n, err := d.Connection.TCPConn.Read(buf)
+			if n > 0 {
+				msg, err := UnMarshalMessage(buf[:n])
 				if err != nil {
-					if err == net.ErrClosed || err.Error() == "use of closed network connection" {
-						d.disconnect()
-						fmt.Println("ReadLoop: Connection closed")
-						return
-					}
-					fmt.Printf("ReadLoop: Read error: %v\n", err)
-					return
-				}
-				if n > 0 {
-					msg, err := unMarshalMessage(buf[:n])
-					if err != nil {
-						fmt.Printf("ReadLoop: Failed to unmarshal message: %v\n", err)
-						continue
-					}
-					d.Connection.MsgCh <- *msg
-				} else {
-					fmt.Println("ReadLoop: Cannot read empty buffer slice")
+					fmt.Printf("ReadLoop: Failed to unmarshal message: %v\n", err)
 					continue
 				}
-			*/
+				d.Connection.msgch <- *msg
+			}
 		}
 	}
 }
 
-/*
 func (d *Device) startHeartbeat() {
-	defer d.wg.Done()
-	hbInt, err := time.ParseDuration(d.HeartbeatInterval)
-	if err != nil {
-		hbInt = 5 * time.Second
-	}
-
+	defer d.Connection.wg.Done()
+	hbInt := d.HeartbeatInterval
 	ticker := time.NewTicker(hbInt)
 	defer ticker.Stop()
 	for {
 		select {
 		case <-ticker.C:
-			if d.Connection.ConnStatus == "CONNECTED" {
-				d.mu.Lock()
+			if d.Connection.Status == StatusConnected {
+				d.mu.RLock()
 				heartbeatMessage := d.createHeartBeatMessage()
-				d.mu.Unlock()
-				d.sendHeartbeat(heartbeatMessage)
+				d.mu.RUnlock()
+
+				d.sendHeartbeat(*heartbeatMessage)
 			}
-		case <-d.Connection.ConnCtx.Done():
-			fmt.Printf("Device %s stopping heartbeats\n", d.ID)
+		case <-d.Connection.connCtx.Done():
+			fmt.Printf("Device %s stopping heartbeats\n", d.DeviceID)
 			return
 		}
+
 	}
 }
+
+func (d *Device) createMessageHead() *MessageHead {
+	return &MessageHead{
+		ConnectionID:  d.Connection.ConnectionID,
+		TransactionID: "test-123", // Placeholder for transaction ID; adjust as necessary
+		From:          d.Connection.TCPConnection.LocalAddr().String(),
+		Type:          MsgTypeHeartbeat,
+		Timestamp:     time.Now().UTC(),
+	}
+}
+
+func (d *Device) createHeartBeatMessage() *Message[HeartbeatPayload] {
+	payload := HeartbeatPayload{
+		DeviceID:        d.DeviceID,
+		Temperature:     d.Temperature,
+		Mode:            d.Mode,
+		LastMaintenance: d.LastMaintenance,
+		Status:          d.Connection.Status,
+	}
+
+	return &Message[HeartbeatPayload]{
+		Headers: *d.createMessageHead(),
+		Payload: payload,
+		Errors:  d.Errors,
+	}
+}
+
+func (d *Device) sendHeartbeat(message Message[HeartbeatPayload]) {
+	messageJSON, err := message.MarshalMessage()
+	if err != nil {
+		fmt.Printf("Error marshalling message: %v\n", err)
+		return
+	}
+	message.PrintMessage()
+	d.Connection.TCPConnection.Write(messageJSON)
+	d.mu.Lock()
+	d.Connection.LastCommunication = time.Now()
+	d.mu.Unlock()
+}
+
+func (m *Message[T]) MarshalMessage() ([]byte, error) {
+	messageJSON, err := json.Marshal(m)
+	if err != nil {
+		return nil, fmt.Errorf("error marshalling full message: %v", err)
+	}
+	return messageJSON, nil
+}
+
+func UnMarshalMessage(raw []byte) (*Message[any], error) {
+	var message Message[any]
+	err := json.Unmarshal(raw, &message)
+	if err != nil {
+		return &message, fmt.Errorf("error marshalling full message: %v", err)
+	}
+	switch message.Headers.Type {
+	case MsgTypeHeartbeat:
+		var payload HeartbeatPayload
+		if err := json.Unmarshal(raw, &payload); err != nil {
+			return &message, fmt.Errorf("error unmarshalling heartbeat payload: %v", err)
+		}
+		message.Payload = payload
+	default:
+		return &message, fmt.Errorf("unknown message type: %v", message.Headers.Type)
+	}
+	return &message, nil
+}
+
+func (m *Message[T]) PrintMessage() {
+	msgJSON, err := json.MarshalIndent(m, "", "  ")
+	if err != nil {
+		fmt.Println("Error marshalling message:", err)
+		return
+	}
+	fmt.Println(string(msgJSON))
+}
+
+/*
+
 
 func (d *Device) handleMessage(msg Message[any]) {
 	d.mu.Lock()
@@ -318,40 +399,6 @@ func (d *Device) handleMessage(msg Message[any]) {
 		d.mu.Unlock()
 		d.sendHeartbeat(heartbeatMessage)
 	}
-}
-
-func (d *Device) createHeartBeatMessage() Message[Heartbeat] {
-	heartbeatMessage := Message[Heartbeat]{
-		ID:        uuid.New().String(),
-		From:      d.Connection.TCPConn.LocalAddr().String(),
-		MsgType:   "HEARTBEAT",
-		Payload:   d.createHeartbeatPayload(),
-		Timestamp: time.Now(),
-	}
-	return heartbeatMessage
-}
-
-func (d *Device) createHeartbeatPayload() Heartbeat {
-	heartbeatPayload := Heartbeat{
-		ID:              d.ID,
-		Status:          d.Status,
-		Mode:            d.Mode,
-		Temperature:     d.Temperature,
-		LastMaintenance: d.LastMaintenance,
-		Errors:          d.Errors,
-	}
-	return heartbeatPayload
-}
-
-func (d *Device) sendHeartbeat(heartbeatMessage Message[Heartbeat]) {
-	messageJSON, err := marshalMessage(heartbeatMessage)
-	if err != nil {
-		fmt.Printf("Error marshalling message: %v\n", err)
-		return
-	}
-	fmt.Println(string(messageJSON))
-	d.Connection.TCPConn.Write(messageJSON)
-	d.Connection.LastCommunication = time.Now()
 }
 
 func (d *Device) processInstruction(instruction Instruction) {
@@ -405,39 +452,4 @@ func (d *Device) reconnect() {
 	}
 }
 
-func unMarshalMessage(messageJSON []byte) (*Message[any], error) {
-	var message Message[any]
-	err := json.Unmarshal(messageJSON, &message)
-	if err != nil {
-		return nil, fmt.Errorf("Error unmarshalling command: %v", err)
-	}
-	switch message.MsgType {
-	case "HEARTBEAT":
-		var payload Heartbeat
-		err := json.Unmarshal(messageJSON, &payload)
-		if err != nil {
-			return nil, fmt.Errorf("Error unmarshalling heartbeat payload: %v", err)
-		}
-		message.Payload = payload
-	case "INSTRUCTION":
-		var payload Instruction
-		err := json.Unmarshal(messageJSON, &payload)
-		if err != nil {
-			return nil, fmt.Errorf("Error unmarshalling instruction payload: %v", err)
-		}
-		message.Payload = payload
-	default:
-		return nil, fmt.Errorf("unknown message type: %s", message.MsgType)
-	}
-
-	return &message, nil
-}
-
-func marshalMessage[T any](message Message[T]) ([]byte, error) {
-	messageJSON, err := json.Marshal(message)
-	if err != nil {
-		return nil, fmt.Errorf("Error marshalling payload: %v", err)
-	}
-	return messageJSON, nil
-}
 */

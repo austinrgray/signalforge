@@ -4,73 +4,60 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
-
-	"github.com/joho/godotenv"
+	"time"
 )
 
-const MaxConnectionAttempts = 5
-const ConnectionAttemptDelay = 3
-
 type Config struct {
-	TCPHost string
-	TCPPort string
-	Device  *Device
-	Devices []*Device `json:"devices"`
+	TCPServerHost          string   `json:"-"`
+	TCPServerPort          string   `json:"-"`
+	MaxConnectionAttempts  int      `json:"max_connection_attempts"`
+	MaxRetriesOnError      int      `json:"max_retries_on_error"`
+	MaxMessageSize         int      `json:"max_message_size"`
+	ConnectionAttemptDelay Duration `json:"connection_attempt_delay"`
+	ConnectionLockout      Duration `json:"connection_lockout_duration"`
+	HandshakeTimeout       Duration `json:"handshake_timeout"`
+	ReadTimeout            Duration `json:"read_timeout"`
+	WriteTimeout           Duration `json:"write_timeout"`
 }
 
-func LoadConfigs(jsonConfigPath string, presetID string) (*Config, error) {
+type Duration time.Duration
+
+func (d *Duration) UnmarshalJSON(b []byte) error {
+	str := string(b)
+	str = str[1 : len(str)-1]
+	duration, err := time.ParseDuration(str)
+	if err != nil {
+		return fmt.Errorf("invalid duration format: %s", str)
+	}
+	*d = Duration(duration)
+	return nil
+}
+
+func LoadConfigs() (*Config, error) {
+	//Load and Parse config.json
+	configJSON, err := os.Open("pkg/oxrecycler/config.json")
+	if err != nil {
+		return nil, fmt.Errorf("failed to read config file: %w", err)
+	}
+	defer configJSON.Close()
+
 	var config Config
-
-	err := config.LoadEnvConfig()
+	decoder := json.NewDecoder(configJSON)
+	err = decoder.Decode(&config)
 	if err != nil {
-		return nil, fmt.Errorf("failed to load config: %v", err)
+		return nil, fmt.Errorf("error parsing config.json file: %v", err)
 	}
 
-	err = config.LoadJSONConfig(jsonConfigPath)
-	if err != nil {
-		return nil, fmt.Errorf("failed to load config: %v", err)
+	//Load .env variables
+	if host := os.Getenv("SERVER_HOST_TCP"); host != "" {
+		config.TCPServerHost = host
+	} else {
+		config.TCPServerHost = "localhost"
 	}
-
-	err = config.LoadDevicePreset(presetID)
-	if err != nil {
-		return nil, fmt.Errorf("failed to load config: %v", err)
+	if port := os.Getenv("SERVER_PORT_TCP"); port != "" {
+		config.TCPServerPort = port
+	} else {
+		config.TCPServerHost = ":3000"
 	}
 	return &config, nil
-}
-
-func (c *Config) LoadEnvConfig() error {
-	err := godotenv.Load()
-	if err != nil {
-		return fmt.Errorf("Error loading .env file: %v", err)
-	}
-	c.TCPHost = os.Getenv("SERVER_HOST_TCP")
-	c.TCPPort = os.Getenv("SERVER_PORT_TCP")
-
-	if c.TCPHost == "" || c.TCPPort == "" {
-		return fmt.Errorf("missing required environment variables: SERVER_HOST_TCP or SERVER_PORT_TCP")
-	}
-	return nil
-}
-
-func (c *Config) LoadJSONConfig(jsonConfigPath string) error {
-	data, err := os.ReadFile(jsonConfigPath)
-	if err != nil {
-		return fmt.Errorf("failed to read config file: %v", err)
-	}
-
-	err = json.Unmarshal(data, &c)
-	if err != nil {
-		return fmt.Errorf("failed to unmarshal config: %v", err)
-	}
-	return nil
-}
-
-func (c *Config) LoadDevicePreset(id string) error {
-	for _, d := range c.Devices {
-		if d.ID == id {
-			c.Device = d
-			return nil
-		}
-	}
-	return fmt.Errorf("device with ID %s not found", id)
 }
